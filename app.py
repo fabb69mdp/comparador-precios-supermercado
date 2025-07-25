@@ -2,102 +2,81 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 import pandas as pd
 from datetime import datetime
 
-SITIOS = [
-    {
-        "nombre": "TuAlmacén",
-        "url_busqueda": lambda query: f"https://tualmacen.com.ar/?s={quote_plus(query)}",
-        "selector_item": ".product-small",
-        "selector_nombre": ".woocommerce-loop-product__title",
-        "selector_precio": ".price",
-        "base_url": "https://tualmacen.com.ar"
-    },
-    {
-        "nombre": "Cooperativa Obrera",
-        "url_busqueda": lambda query: f"https://www.cooperativaobrera.coop/buscar?txtBusqueda={quote_plus(query)}",
-        "selector_item": ".col-xs-12.col-sm-6.col-md-3.col-lg-3",
-        "selector_nombre": ".descripcion_articulo",
-        "selector_precio": ".precio_oferta",
-        "base_url": "https://www.cooperativaobrera.coop"
-    },
-    {
-        "nombre": "Toledo",
-        "url_busqueda": lambda query: f"https://www.toledodigital.com.ar/catalogsearch/result/?q={quote_plus(query)}",
-        "selector_item": ".product-item-info",
-        "selector_nombre": ".product-item-name",
-        "selector_precio": ".price",
-        "base_url": "https://www.toledodigital.com.ar"
-    },
-]
+st.set_page_config(page_title="Comparador de Precios", layout="centered")
 
-def buscar_producto(sitio, consulta):
-    resultados = []
-    try:
-        url = sitio["url_busqueda"](consulta)
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.select(sitio["selector_item"])
-
-        for item in items[:5]:
-            try:
-                nombre = item.select_one(sitio["selector_nombre"]).get_text(strip=True)
-                precio = item.select_one(sitio["selector_precio"]).get_text(strip=True)
-                resultados.append({
-                    "Sitio": sitio["nombre"],
-                    "Producto": nombre,
-                    "Precio": precio,
-                    "Link": url,
-                    "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-            except:
-                continue
-
-    except Exception as e:
-        resultados.append({
-            "Sitio": sitio["nombre"],
-            "Producto": "Error",
-            "Precio": str(e),
-            "Link": "-",
-            "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-
-    return resultados
-
-# Interfaz
-st.set_page_config(page_title="Comparador de Precios", layout="wide")
 st.title("🛒 Comparador de Precios de Supermercados")
+st.write("🔍 Ingresá un producto para buscar:")
 
-consulta = st.text_input("🔍 Ingresá un producto para buscar:", "Coca Cola 1.5 Litros")
+query = st.text_input("")
+buscar = st.button("Buscar")
 
-if "historial" not in st.session_state:
-    st.session_state["historial"] = []
+resultados = []
 
-if st.button("Buscar") and consulta:
-    resultados_totales = []
-    with st.spinner("Buscando en supermercados..."):
-        for sitio in SITIOS:
-            resultados = buscar_producto(sitio, consulta)
-            resultados_totales.extend(resultados)
+def scrape_toledo(query):
+    url = f"https://www.toledodigital.com.ar/catalogsearch/result/?q={query.replace(' ', '+')}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "lxml")
+    productos = soup.select(".product-item")
+    for p in productos:
+        nombre = p.select_one(".product.name.product-item-name a")
+        precio = p.select_one(".price")
+        if nombre and precio:
+            resultados.append({
+                "Sitio": "Toledo",
+                "Producto": nombre.text.strip(),
+                "Precio": precio.text.strip(),
+                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
 
-    st.session_state["historial"].extend(resultados_totales)
-    df = pd.DataFrame(resultados_totales)
+def scrape_cooperativa(query):
+    url = f"https://www.cooperativaobrera.coop/sitios/cdo/catalogsearch/result/?q={query.replace(' ', '+')}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "lxml")
+    productos = soup.select(".product-item")
+    for p in productos:
+        nombre = p.select_one(".product-item-link")
+        precio = p.select_one(".price")
+        if nombre and precio:
+            resultados.append({
+                "Sitio": "Cooperativa Obrera",
+                "Producto": nombre.text.strip(),
+                "Precio": precio.text.strip(),
+                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
 
-    st.subheader(f"Resultados para: {consulta}")
-    st.dataframe(df[["Sitio", "Producto", "Precio", "Fecha"]])
+def scrape_tualmacen(query):
+    url = f"https://tualmacen.com.ar/search/?q={query.replace(' ', '%20')}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "lxml")
+    productos = soup.select(".product-card")
+    for p in productos:
+        nombre = p.select_one(".product-title")
+        precio = p.select_one(".price-item")
+        if nombre and precio:
+            resultados.append({
+                "Sitio": "TuAlmacén",
+                "Producto": nombre.text.strip(),
+                "Precio": precio.text.strip(),
+                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
 
-    if st.download_button("📥 Descargar resultados como CSV", data=df.to_csv(index=False), file_name="precios.csv"):
-        st.success("Descarga iniciada.")
-
-st.markdown("---")
-st.subheader("📊 Historial de búsquedas en esta sesión")
-
-if st.session_state["historial"]:
-    df_hist = pd.DataFrame(st.session_state["historial"])
-    st.dataframe(df_hist[["Sitio", "Producto", "Precio", "Fecha"]])
-    st.download_button("📥 Descargar historial como CSV", data=df_hist.to_csv(index=False), file_name="historial.csv")
-else:
-    st.info("Todavía no buscaste ningún producto.")
+if buscar and query.strip():
+    st.subheader(f"Resultados para: {query}")
+    with st.spinner("Buscando precios en supermercados..."):
+        try:
+            scrape_toledo(query)
+            scrape_cooperativa(query)
+            scrape_tualmacen(query)
+            df = pd.DataFrame(resultados)
+            if df.empty:
+                st.warning("⚠️ No se encontraron resultados para esa búsqueda.")
+            else:
+                st.dataframe(df[["Sitio", "Producto", "Precio", "Fecha"]])
+        except Exception as e:
+            st.error(f"❌ Ocurrió un error: {e}")
