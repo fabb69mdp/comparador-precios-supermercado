@@ -3,80 +3,87 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from datetime import datetime
-
-st.set_page_config(page_title="Comparador de Precios", layout="centered")
+from urllib.parse import quote
 
 st.title("🛒 Comparador de Precios de Supermercados")
-st.write("🔍 Ingresá un producto para buscar:")
 
-query = st.text_input("")
-buscar = st.button("Buscar")
+producto = st.text_input("Ingresá un producto para buscar:", "Coca Cola 1.5 Litros")
 
-resultados = []
+def normalizar_producto(prod):
+    prod = prod.lower().replace("1.5", "1500")
+    return quote(prod)
 
-def scrape_toledo(query):
-    url = f"https://www.toledodigital.com.ar/catalogsearch/result/?q={query.replace(' ', '+')}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers)
-    soup = BeautifulSoup(r.text, "lxml")
-    productos = soup.select(".product-item")
-    for p in productos:
-        nombre = p.select_one(".product.name.product-item-name a")
-        precio = p.select_one(".price")
+def scrape_tualmacen(prod):
+    url = f"https://tualmacen.com.ar/busqueda/{prod}"
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
+    items = soup.select("div.item")
+    resultados = []
+    for item in items:
+        nombre = item.select_one(".product-title")
+        precio = item.select_one(".price")
+        if nombre and precio:
+            resultados.append({
+                "Sitio": "TuAlmacen",
+                "Producto": nombre.text.strip(),
+                "Precio": precio.text.strip(),
+            })
+    return resultados
+
+def scrape_toledo(prod):
+    url = f"https://www.toledodigital.com.ar/{prod}?_q={prod}&map=ft"
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
+    items = soup.select("div.vtex-product-summary-2-x-container")
+    resultados = []
+    for item in items:
+        nombre = item.select_one("span.vtex-product-summary-2-x-productBrand")
+        precio = item.select_one("span.vtex-product-price-1-x-sellingPrice")
         if nombre and precio:
             resultados.append({
                 "Sitio": "Toledo",
                 "Producto": nombre.text.strip(),
                 "Precio": precio.text.strip(),
-                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
             })
+    return resultados
 
-def scrape_cooperativa(query):
-    url = f"https://www.cooperativaobrera.coop/sitios/cdo/catalogsearch/result/?q={query.replace(' ', '+')}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers)
-    soup = BeautifulSoup(r.text, "lxml")
-    productos = soup.select(".product-item")
-    for p in productos:
-        nombre = p.select_one(".product-item-link")
-        precio = p.select_one(".price")
+def scrape_cooperativa(prod):
+    url = f"https://www.lacoopeencasa.coop/listado/busqueda-avanzada/{prod}"
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
+    items = soup.select("div.lista-producto")
+    resultados = []
+    for item in items:
+        nombre = item.select_one("h2")
+        precio = item.select_one("span.precio")
         if nombre and precio:
             resultados.append({
-                "Sitio": "Cooperativa Obrera",
+                "Sitio": "La Coope",
                 "Producto": nombre.text.strip(),
                 "Precio": precio.text.strip(),
-                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
             })
+    return resultados
 
-def scrape_tualmacen(query):
-    url = f"https://tualmacen.com.ar/search/?q={query.replace(' ', '%20')}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers)
-    soup = BeautifulSoup(r.text, "lxml")
-    productos = soup.select(".product-card")
-    for p in productos:
-        nombre = p.select_one(".product-title")
-        precio = p.select_one(".price-item")
-        if nombre and precio:
-            resultados.append({
-                "Sitio": "TuAlmacén",
-                "Producto": nombre.text.strip(),
-                "Precio": precio.text.strip(),
-                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M")
-            })
+if st.button("Buscar") and producto:
+    st.subheader(f"Resultados para: {producto}")
+    producto_normalizado = normalizar_producto(producto)
+    resultados = []
+    try:
+        resultados += scrape_tualmacen(producto_normalizado)
+    except:
+        st.error("Error al acceder a TuAlmacen")
+    try:
+        resultados += scrape_toledo(producto_normalizado)
+    except:
+        st.error("Error al acceder a Toledo")
+    try:
+        resultados += scrape_cooperativa(producto_normalizado)
+    except:
+        st.error("Error al acceder a La Coope")
 
-if buscar and query.strip():
-    st.subheader(f"Resultados para: {query}")
-    with st.spinner("Buscando precios en supermercados..."):
-        try:
-            scrape_toledo(query)
-            scrape_cooperativa(query)
-            scrape_tualmacen(query)
-            df = pd.DataFrame(resultados)
-            if df.empty:
-                st.warning("⚠️ No se encontraron resultados para esa búsqueda.")
-            else:
-                st.dataframe(df[["Sitio", "Producto", "Precio", "Fecha"]])
-        except Exception as e:
-            st.error(f"❌ Ocurrió un error: {e}")
+    if resultados:
+        df = pd.DataFrame(resultados)
+        df["Fecha"] = pd.Timestamp.now().strftime("%Y-%m-%d")
+        st.dataframe(df[["Sitio", "Producto", "Precio", "Fecha"]])
+    else:
+        st.warning("No se encontraron resultados para ese producto.")
